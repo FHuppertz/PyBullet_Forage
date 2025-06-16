@@ -5,10 +5,6 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
-## TODO:
-# Collision avoidance
-# Performance meassure
-
 # Object
 class Object():
     def __init__(self, x, y):
@@ -63,6 +59,9 @@ class Agent():
             [self.agent_pos[0], self.agent_pos[1], 0.2],
             [0, 0, 0, 1]
         )
+            
+        v = v/(np.linalg.norm(v)+0.001)*self.max_speed
+
         p.resetBaseVelocity(
             self.id,
             linearVelocity=v,     
@@ -70,49 +69,60 @@ class Agent():
         )
 
     def agentBehaviour(self, agents, objects):
+        # State machine for agent behaviour
         self.agent_pos = np.array(p.getBasePositionAndOrientation(self.id)[0])
 
+        # Biased random walk + repulsion until object is found
         if self.state == 'searching':
             k = self.search_radius
             for i in range(len(objects)):
                 obj_pos = np.array(p.getBasePositionAndOrientation(objects[i].id)[0])
-                if np.linalg.norm(obj_pos-self.agent_pos) <= k:
-                    self.target = objects[i]
-                    k = np.linalg.norm(obj_pos-self.agent_pos)
+                if obj_pos[0]>=(self.agent_pos[0]-self.search_radius) and obj_pos[0]<=(self.agent_pos[0]+self.search_radius):
+                     if obj_pos[1]>=(self.agent_pos[1]-self.search_radius) and obj_pos[1]<=(self.agent_pos[1]+self.search_radius):
+                        if np.linalg.norm(obj_pos-self.agent_pos) <= k:
+                            self.target = objects[i]
+                            k = np.linalg.norm(obj_pos-self.agent_pos)
             if k != self.search_radius:
                 self.state = 'grabbing'
             
-            # Biased random walk
-            bias = self.agent_pos/(np.linalg.norm(self.agent_pos)+0.1)
+            repulsion = 10*self.agent_pos/(np.linalg.norm(self.agent_pos)**2+0.001)
+            for a in agents:
+                if a.agent_pos[0]>=(self.agent_pos[0]-self.search_radius) and a.agent_pos[0]<=(self.agent_pos[0]+self.search_radius):
+                     if a.agent_pos[1]>=(self.agent_pos[1]-self.search_radius) and a.agent_pos[1]<=(self.agent_pos[1]+self.search_radius):
+                        distance_to_agent = self.agent_pos - a.agent_pos
+                        if np.linalg.norm(distance_to_agent) <= self.search_radius:
+                            repulsion += distance_to_agent/(np.linalg.norm(distance_to_agent)**2+0.001)
+
+            bias = self.agent_pos/(np.linalg.norm(self.agent_pos)**2+0.001)
             if np.linalg.norm(self.agent_pos) >= home_base_radius*2:
-                bias *= -0.1
+                bias *= -0.1*np.linalg.norm(self.agent_pos)
 
             if np.random.rand(1) > 0.99:
                 x = np.random.rand()*np.random.choice([-self.max_speed, self.max_speed])
                 y = np.random.rand()*np.random.choice([-self.max_speed, self.max_speed])
                 self.v = np.array([x,y,0])
-                self.v += bias*3
-                self.v *= self.max_speed/(np.linalg.norm(self.v)+0.01)
-                self.agentMotion(self.v)
+                self.agentMotion(self.v+bias*5+repulsion*5)
             else:
-                self.agentMotion(self.v+bias*10)
+                self.agentMotion(self.v+bias*10+repulsion*5)
 
 
+        # Move to object and grab it, if its free
         elif self.state == 'grabbing':
             if self.target.state == 'free':
                 target_pos = np.array(p.getBasePositionAndOrientation(self.target.id)[0])
                 dist = (target_pos - self.agent_pos)
-                self.v = dist/np.linalg.norm(dist)*self.max_speed
-                if np.linalg.norm(dist) <= 0.4:
+                self.v = dist
+                if np.linalg.norm(dist) <= 0.45:
                     self.target.state = 'grabbed'
                     self.agentMotion()
 
+                    # Contraints to simulate grabbing (modified ChatGPT)
                     p.resetBasePositionAndOrientation(
                         self.target.id,
                         [self.agent_pos[0], self.agent_pos[1], 0.5],
-                        [0, 0, 0, 1]  # identity quaternion = no rotation
+                        [0, 0, 0, 1]
                     )
-                    # Grab the object
+
                     parent_pos, parent_orn = p.getBasePositionAndOrientation(self.id)
                     child_pos, child_orn   = p.getBasePositionAndOrientation(self.target.id)
 
@@ -124,6 +134,7 @@ class Agent():
                         parent_inv_pos, parent_inv_orn,
                         child_pos, child_orn
                     )
+                    # Create contraint as grab
                     self.grab_constrain = p.createConstraint(
                         parentBodyUniqueId=self.id,
                         parentLinkIndex=-1,
@@ -132,7 +143,7 @@ class Agent():
                         jointType=p.JOINT_FIXED,
                         jointAxis=[0, 0, 0],
                         parentFramePosition=rel_pos,
-                        childFramePosition=[0, 0, 0],  # attach at child center
+                        childFramePosition=[0, 0, 0],
                         parentFrameOrientation=rel_orn,
                         childFrameOrientation=[0, 0, 0, 1]
                     )
@@ -144,104 +155,113 @@ class Agent():
             else:
                 self.state = 'searching'
 
+        # Go back to home base and drop the object there
         elif self.state == 'homing':
             target_pos = np.array(p.getBasePositionAndOrientation(self.target.id)[0])
             dist = (np.array([0,0,0]) - target_pos)
-            self.v = dist/np.linalg.norm(dist)*self.max_speed
+            self.v = dist
 
             # Check if on home base
             if np.linalg.norm(dist) <= home_base_radius*0.75:
                 self.agentMotion()
                 p.removeConstraint(self.grab_constrain)
                 self.target.state = 'collected'
+                collected.append(objects.pop(objects.index(self.target)))
                 self.state = 'searching'
             else:
                 self.agentMotion(self.v)
         
-setups = [1,3,5,10]
-results = []
-for n in range(len(setups)):
-    agents = []
-    objects = []
-    collected = []
 
-    num_agents = setups[n]
-    num_objects = 100
-    home_base_radius = 5
-    world_size = 15
+# Simulation settings
+swarm_size = [1,5,10,15,20,25,30,35,40,45,50]
+for _ in range(10):
+    results = []
+    for n in range(len(swarm_size)):
+        agents = []
+        objects = []
+        collected = []
 
-    total_time = 20
-    time_step = 0.005
+        num_agents = swarm_size[n]
+        num_objects = 50
+        home_base_radius = 5
+        world_size = 30 # n x n world
 
-    GUI = True
+        total_time = 15
+        time_step = 0.005 # Smaller -> faster
 
-    # Setup world
-    if GUI:
-        physicsClient = p.connect(p.GUI)
-        p.resetDebugVisualizerCamera(
-            cameraDistance=20.0,
-            cameraYaw=0,                
-            cameraPitch=-89.99,
-            cameraTargetPosition=[0, 0, 0] 
-        )
-    else:
-        physicsClient = p.connect(p.DIRECT)
+        GUI = True # Visual simulation
 
-    p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
-    p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
-    p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
-    p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+        # Setup world
+        if GUI:
+            physicsClient = p.connect(p.GUI)
+            p.resetDebugVisualizerCamera(
+                cameraDistance=20.0,
+                cameraYaw=0,                
+                cameraPitch=-89.99,
+                cameraTargetPosition=[0, 0, 0] 
+            )
+        else:
+            physicsClient = p.connect(p.DIRECT)
 
-    # Load plane
-    p.setAdditionalSearchPath(pybullet_data.getDataPath())
-    p.setGravity(0,0,-10)
-    planeId = p.loadURDF("plane.urdf")
+        p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
+        p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
+        p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
 
-    ## Spawn agents
-    for i in range(num_agents):
-        # Create the agents at random points inside the home base
-        r = (np.random.rand()*home_base_radius) 
-        angle = np.random.rand()*2*np.pi
-        x = r*np.cos(angle)
-        y = r*np.sin(angle)
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        p.setGravity(0,0,-10)
+        planeId = p.loadURDF("plane.urdf")
 
-        agents.append(Agent(x,y))
+        ## Spawn agents
+        for i in range(num_agents):
+            # Create the agents at random points inside the home base
+            r = (np.random.rand()*home_base_radius) 
+            angle = np.random.rand()*2*np.pi
+            x = r*np.cos(angle)
+            y = r*np.sin(angle)
 
-    ## Spawn objects
-    for i in range(num_objects):
-        # Create the cubes at random points around the home base
-        r = (np.random.rand()*world_size + home_base_radius) 
-        angle = np.random.rand()*2*np.pi
-        x = r*np.cos(angle)
-        y = r*np.sin(angle)
-        
-        objects.append(Object(x,y))
+            agents.append(Agent(x,y))
 
-    steps = int(total_time/time_step)
-    for i in range(steps):
-        for agent in agents:
-            agent.agentBehaviour(agents, objects)
+        ## Spawn objects
+        for i in range(num_objects):
+            # Create the cubes at random points around the home base
+            r = (np.random.rand()*world_size + home_base_radius) 
+            angle = np.random.rand()*2*np.pi
+            x = r*np.cos(angle)
+            y = r*np.sin(angle)
+            
+            objects.append(Object(x,y))
 
-        for c in collected:
-            if np.linalg.norm(p.getBasePositionAndOrientation(c.id)[0]) > home_base_radius:
-                c.state = 'free'
-                objects.append(collected.pop(collected.index(c)))
-        for o in objects:
-            if np.linalg.norm(p.getBasePositionAndOrientation(o.id)[0]) <= home_base_radius:
-                o.state = 'collected'
-                collected.append(objects.pop(objects.index(o)))
+        # Simulate for given time
+        steps = int(total_time/time_step)
+        for i in range(steps):
+            for agent in agents:
+                agent.agentBehaviour(agents, objects)
 
-        p.stepSimulation()
-        time.sleep(time_step)
+            for c in collected:
+                if np.linalg.norm(p.getBasePositionAndOrientation(c.id)[0]) > home_base_radius:
+                    c.state = 'free'
+                    objects.append(collected.pop(collected.index(c)))
 
-    percent_collected = len(collected)/num_objects*100
-    np.round(percent_collected,2)
-    print('World size:', str(world_size)+'m x '+str(world_size)+'m', '| Home base radius:', str(home_base_radius)+'m')
-    print('Angents:', num_agents, '| Objects:', num_objects)
-    print('Time: ', str(total_time) + 's')
-    print('Objects collected:', str(percent_collected)+'%')
-    results.append(percent_collected)
-    p.disconnect()
+            p.stepSimulation()
+            if GUI:
+                time.sleep(time_step)
 
-plt.plot(results)
+        p.disconnect()
+        if num_objects != 0:
+            percent_collected = len(collected)/num_objects*100
+            np.round(percent_collected,2)
+            print('World size:', str(world_size)+'m x '+str(world_size)+'m', '| Home base radius:', str(home_base_radius)+'m')
+            print('Angents:', num_agents, '| Objects:', num_objects)
+            print('Time: ', str(total_time) + 's')
+            print('Objects collected:', str(percent_collected)+'%')
+            results.append(percent_collected)
+            
+    # Plot the performance of each simulation
+    plt.plot(swarm_size, results)
+
+plt.xlabel('Swarm size')
+plt.ylabel('Objects collected [%]')
+plt.xlim((swarm_size[0],swarm_size[-1]))
+plt.grid()
 plt.show()
