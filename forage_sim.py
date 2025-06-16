@@ -173,8 +173,8 @@ class Agent():
         
 
 # Simulation settings
-swarm_size = [1,5,10,15,20,25,30,35,40,45,50]
-for _ in range(10):
+swarm_size = [15]#[1,5,10,15,20,25,30,35,40,45,50]
+for _ in range(1):
     results = []
     for n in range(len(swarm_size)):
         agents = []
@@ -186,8 +186,8 @@ for _ in range(10):
         home_base_radius = 5
         world_size = 30 # n x n world
 
-        total_time = 15
-        time_step = 0.005 # Smaller -> faster
+        total_time = 20
+        time_step = 0.005 # Smaller -> faster agents
 
         GUI = True # Visual simulation
 
