@@ -173,7 +173,7 @@ class Agent():
         
 
 # Simulation settings
-swarm_size = [15]#[1,5,10,15,20,25,30,35,40,45,50]
+swarm_size = [10]#[1,5,10,15,20,25,30,35,40,45,50]
 for _ in range(1):
     results = []
     for n in range(len(swarm_size)):
@@ -186,7 +186,7 @@ for _ in range(1):
         home_base_radius = 5
         world_size = 30 # n x n world
 
-        total_time = 20
+        total_time = 30 #15
         time_step = 0.005 # Smaller -> faster agents
 
         GUI = True # Visual simulation
@@ -262,6 +262,7 @@ for _ in range(1):
 
 plt.xlabel('Swarm size')
 plt.ylabel('Objects collected [%]')
-plt.xlim((swarm_size[0],swarm_size[-1]))
+if len(swarm_size) > 1:
+    plt.xlim((swarm_size[0],swarm_size[-1]))
 plt.grid()
 plt.show()
